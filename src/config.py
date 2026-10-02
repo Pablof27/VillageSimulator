@@ -21,7 +21,6 @@ def _one_of(value, options: tuple, name: str) -> None:
 
 
 def _by_resource(d: dict, name: str) -> dict:
-    """YAML {food: x, wood: y} -> {Resource.FOOD: x, Resource.WOOD: y}."""
     try:
         out = {Resource(k): v for k, v in d.items()}
     except ValueError as e:

@@ -47,6 +47,10 @@ class Agent:
     traded_today: bool = False
     asked_gift_today: set[str] = field(default_factory=set)
 
+    @property
+    def wealth(self) -> int:
+        return sum(self.stock.values())
+
 @dataclass
 class Hunt:
     took_place: bool
@@ -68,3 +72,7 @@ class Village:
     season: dict[Resource, float]
     yesterday: Day
     log: list[LogEvent]
+
+
+def living_others(village, agent: Agent) -> list[Agent]:
+    return [a for a in village.agents if a.alive and a.health > 0 and a.id != agent.id]
