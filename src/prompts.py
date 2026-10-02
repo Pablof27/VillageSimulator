@@ -51,7 +51,6 @@ EVENT_TEMPLATES = {
 }
 NEGATIVE_KINDS = (MEK.ROBBED_ME, MEK.REFUSED_ME, MEK.SHIRKED_IN_MY_HUNT)
 HUNT_KINDS = (MEK.SHIRKED_IN_MY_HUNT, MEK.WORKED_IN_MY_HUNT)
-MAX_TARGETS = 4
 
 OFFER_NOTES = {
     "generous": "Kind to Agent {q}; almost surely accepted. You would keep {left} {o}.",
@@ -169,10 +168,10 @@ def season_sentence(season: dict) -> str:
 def core_sentence(village, agent) -> str:
     cfg = village.cfg
     return (
-        f"You live in a village of {village.n_alive} people, day {village.day} of {cfg.D}. "
-        f"Health {agent.health}/{cfg.health_max}. "
+        f"You live in a village of {village.n_alive} people, day {village.day} of {cfg.population.D}. "
+        f"Health {agent.health}/{cfg.agent.health_max}. "
         f"You have {agent.stock[Resource.FOOD]} food and {agent.stock[Resource.WOOD]} wood; tonight you need 1 of each. "
-        f"{needs_sentence(agent.stock, cfg.need)} {season_sentence(village.season)}"
+        f"{needs_sentence(agent.stock, cfg.agent.need)} {season_sentence(village.season)}"
     )
 
 
@@ -201,29 +200,28 @@ def _others(village, agent) -> list:
 
 
 def _state(village, agent, genes: tuple[str, ...], situation: list[str]) -> str:
-    parts = [persona(agent.genome, genes, village.cfg.persona_mode), core_sentence(village, agent), *situation]
+    parts = [persona(agent.genome, genes, village.cfg.prompts.persona_mode), core_sentence(village, agent), *situation]
     return " ".join(p for p in parts if p)
 
 
 def _reputation(village, other_agent) -> str | None:
-    if not village.cfg.render_reputation:
+    if not village.cfg.prompts.render_reputation:
         return None
-    return reputation_label(other_agent.record, village.cfg.rep_threshold)
+    return reputation_label(other_agent.record, village.cfg.memory.rep_threshold)
 
 
 def _relation(village, agent, other_id: int, named: bool) -> str | None:
-    if not village.cfg.render_memory:
+    if not village.cfg.prompts.render_memory:
         return None
-    return relation_sentence(agent.memory, other_id, village.day, village.cfg.memory_days, named)
+    return relation_sentence(agent.memory, other_id, village.day, village.cfg.memory.days, named)
 
 
 def _memories(village, agent, kinds=None) -> list[str]:
-    # TODO: Change cfg, should be imported from config.py
     cfg = village.cfg
-    if not cfg.render_memory:
+    if not cfg.prompts.render_memory:
         return []
-    events = recent_events(agent.memory, village.day, cfg.memory_days, kinds)
-    return [event_sentence(ev) for ev in reversed(events[:cfg.memory_render])]
+    events = recent_events(agent.memory, village.day, cfg.memory.days, kinds)
+    return [event_sentence(ev) for ev in reversed(events[:cfg.memory.render])]
 
 
 def _hunt_sentence(hunt) -> str:
@@ -250,13 +248,13 @@ def _raids_sentence(n: int) -> str:
 
 
 def raid_candidates(village, agent) -> list:
-    """§5.1: latest grudge, richest, weakest, one random other; deduplicated, at most MAX_TARGETS."""
+    """§5.1: latest grudge, richest, weakest, one random other; deduplicated, at most cfg.raid.max_candidates."""
     others = _others(village, agent)
     if not others:
         return []
     by_id = {a.id: a for a in others}
     ids: list[int] = []
-    for ev in recent_events(agent.memory, village.day, village.cfg.memory_days, NEGATIVE_KINDS):
+    for ev in recent_events(agent.memory, village.day, village.cfg.memory.days, NEGATIVE_KINDS):
         if ev.other_id in by_id:
             ids.append(ev.other_id)
             break
@@ -266,7 +264,7 @@ def raid_candidates(village, agent) -> list:
     rest = [a.id for a in others if a.id not in ids]
     if rest:
         ids.append(rest[int(village.rng.integers(len(rest)))]) # TODO: No tentiendo que es esto
-    return [by_id[i] for i in ids[:MAX_TARGETS]]
+    return [by_id[i] for i in ids[:village.cfg.raid.max_candidates]]
 
 
 # ---- prompt catalogue (§6.4) ------------------------------------------------
@@ -282,28 +280,28 @@ def morning(village, agent) -> tuple[str, dict]:
     ]
     state = _state(village, agent, (Gene.AGGRESSION, Gene.RISK, Gene.SPECIALIZATION), situation)
 
-    expected = {r: cfg.base_yield * gather_mult(agent.genome, r) * village.season[r] for r in Resource}
+    expected = {r: cfg.gathering.base_yield * gather_mult(agent.genome, r) * village.season[r] for r in Resource}
     candidates = raid_candidates(village, agent)
     activity = {
         "gather_food": f"Forage alone. Expect about {_num(expected[Resource.FOOD])} food. Safe. "
                        f"{need_status(agent.stock[Resource.FOOD], Resource.FOOD.value)}",
         "gather_wood": f"Cut wood alone. Expect about {_num(expected[Resource.WOOD])} wood. Safe. "
                        f"{need_status(agent.stock[Resource.WOOD], Resource.WOOD.value)}",
-        "hunt": f"Join the group hunt. If enough hunters work hard, every hunter gets {cfg.hunt_payout} food. "
+        "hunt": f"Join the group hunt. If enough hunters work hard, every hunter gets {cfg.hunt.payout} food. "
                 "If it fails you get nothing today.",
     }
     if candidates:
         activity["raid"] = ("Rob another villager and take half of their stock. "
                             "They may fight back and hurt you, and everyone will know you did it.")
-    activity["rest"] = (f"Stay home and recover {cfg.rest_regen} health. You collect nothing. "
+    activity["rest"] = (f"Stay home and recover {cfg.agent.rest_regen} health. You collect nothing. "
                         f"{health_status(agent.health)}").strip()
 
     questions = {
         "activity": {"type": "choice", "instructions": "Choose what to do today.", "criteria": activity},
         "route": {"type": "choice", "instructions": "Where do you gather?", "criteria": {
             "near": "Nearby. Safe. Normal yield.",
-            "far": f"Far away. Half again as much yield, but a 1 in {round(1 / cfg.far_injury_p)} chance "
-                   f"of an injury costing {cfg.far_injury_dmg} health.",
+            "far": f"Far away. Half again as much yield, but a 1 in {round(1 / cfg.gathering.far_injury_p)} chance "
+                   f"of an injury costing {cfg.gathering.far_injury_dmg} health.",
         }},
     }
     if candidates:
@@ -328,8 +326,8 @@ def effort(village, agent, party, threshold) -> tuple[str, dict]:
     m = len(party)
     mates = [a for a in party if a.id != agent.id]
     situation = [f"You are in a hunting party of {m}: {_agent_list([a.id for a in mates])}."]
-    if cfg.render_reputation:
-        th = cfg.rep_threshold
+    if cfg.prompts.render_reputation:
+        th = cfg.memory.rep_threshold
         shirkers = [a.id for a in mates if a.record.free_rode >= th]
         reliable = [a.id for a in mates if a.record.contributed >= th and a.record.free_rode < th]
         if shirkers:
@@ -342,13 +340,13 @@ def effort(village, agent, party, threshold) -> tuple[str, dict]:
     situation += _memories(village, agent, HUNT_KINDS)
     state = _state(village, agent, (Gene.ALTRUISM,), situation)
 
-    payout = min(cfg.hunt_payout, floor(cfg.hunt_supply_per_capita * village.n_alive / m))
+    payout = min(cfg.hunt.payout, floor(cfg.hunt.supply_per_capita * village.n_alive / m))
     questions = {"effort": {
         "type": "choice",
         "instructions": f"The hunt succeeds only if at least {threshold} of the {m} hunters work hard. "
                         "Choose your effort.",
         "criteria": {
-            "contribute": f"Work hard. Costs you {cfg.hunt_effort_cost} health. "
+            "contribute": f"Work hard. Costs you {cfg.hunt.effort_cost} health. "
                           "Makes the hunt more likely to succeed for everyone.",
             "free_ride": f"Hold back. Costs nothing. If the others succeed you still get the same {payout} food.",
         },
@@ -364,7 +362,7 @@ def defend(village, agent, attacker) -> tuple[str, dict]:
     state = _state(village, agent, (Gene.AGGRESSION, Gene.RISK), [s for s in situation if s])
 
     questions = {"defend": {"type": "choice", "instructions": "What do you do?", "criteria": {
-        "fight": f"Fight back. {fight_note} The loser loses half of their stock and {village.cfg.fight_dmg} health.",
+        "fight": f"Fight back. {fight_note} The loser loses half of their stock and {village.cfg.raid.fight_dmg} health.",
         "yield": f"Hand over half of your stock and stay unharmed. {yield_note}",
     }}}
     return state, questions

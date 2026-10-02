@@ -42,7 +42,7 @@ class Agent:
     record: Record = field(default_factory=Record)
     memory: list[MemoryEvent] = field(default_factory=list)
     activity: str | None = None
-    route: str
+    route: str | None = None
     target: int | None = None
     traded_today: bool = False
     asked_gift_today: set[str] = field(default_factory=set)
