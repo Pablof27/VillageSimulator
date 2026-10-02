@@ -1,40 +1,33 @@
 # Prompt catalogue (SIMULATION_DESIGN.md §6.4): state = persona + core + situation.
-#
-# Duck-typed inputs:
-#   village: agents, day, n_alive, rng, season {r: mult}, cfg,
-#            yesterday.congestion {r: factor}, yesterday.hunt (took_place, success, contributors, party_size), yesterday.raids
-#   agent:   id, alive, health, stock {r: int}, genome (agg, alt, risk, spec),
-#            record (raids, gifts, contributed, free_rode), memory [(day, other_id, kind, resource)]
-#   cfg:     flat §3.2 parameters + persona_mode, render_reputation, render_memory
-from math import floor
 
-RESOURCES = ("food", "wood")
-AGGRESSION, ALTRUISM, RISK, SPECIALIZATION = "agg", "alt", "risk", "spec"
-GENES = (AGGRESSION, ALTRUISM, RISK, SPECIALIZATION)
+from math import floor
+from resources import Resource, other
+from world import MemoryEventKind as MEK
+from genes import Gene, level, gather_mult
 
 PERSONA = {
-    AGGRESSION: (
+    Gene.AGGRESSION: (
         "You are a gentle farmer who abhors violence and never takes what is not yours.",
         "You are a quiet villager who dislikes conflict.",
         "You are an ordinary villager who takes care of your own.",
         "You are a tough brawler who takes what you need.",
         "You are a feared raider who lives by taking from others.",
     ),
-    ALTRUISM: (
+    Gene.ALTRUISM: (
         "You are a miser who never shares anything with anyone.",
         "You are a self-reliant villager who seldom helps others.",
         "You are an ordinary villager who helps when it is convenient.",
         "You are a kind neighbour who likes to help others.",
         "You are a devoted helper who always shares with those in need.",
     ),
-    RISK: (
+    Gene.RISK: (
         "You are extremely cautious and avoid every risk.",
         "You prefer safe, predictable choices.",
         "You take moderate risks when the reward is worth it.",
         "You are bold and enjoy taking chances.",
         "You are a reckless gambler who loves danger.",
     ),
-    SPECIALIZATION: (
+    Gene.SPECIALIZATION: (
         "You are a master woodcutter but a poor forager.",
         "You are a good woodcutter and a mediocre forager.",
         "You are equally able at foraging and woodcutting.",
@@ -43,22 +36,21 @@ PERSONA = {
     ),
 }
 
-# {O}: the other agent as subject, {o}: as object, {os}: possessive.
 EVENT_TEMPLATES = {
-    "robbed_me": "{O} robbed you on day {d}.",
-    "i_robbed": "You robbed {o} on day {d}.",
-    "gave_me": "{O} gave you {r} on day {d}.",
-    "i_gave": "You gave {o} {r} on day {d}.",
-    "traded_fair": "{O} traded fairly with you on day {d}.",
-    "traded_generous_to_me": "{O} traded generously with you on day {d}.",
-    "traded_greedy_to_me": "{O} drove a hard bargain with you on day {d}.",
-    "refused_me": "{O} refused your offer on day {d}.",
-    "i_refused": "You refused {os} offer on day {d}.",
-    "shirked_in_my_hunt": "{O} held back in your hunt on day {d}.",
-    "worked_in_my_hunt": "{O} worked hard in your hunt on day {d}.",
+    MEK.ROBBED_ME: "{O} robbed you on day {d}.",
+    MEK.I_ROBBED: "You robbed {o} on day {d}.",
+    MEK.GAVE_ME: "{O} gave you {r} on day {d}.",
+    MEK.I_GAVE: "You gave {o} {r} on day {d}.",
+    MEK.TRADED_FAIR: "{O} traded fairly with you on day {d}.",
+    MEK.TRADED_GENEROUS_TO_ME: "{O} traded generously with you on day {d}.",
+    MEK.TRADED_GREEDY_TO_ME: "{O} drove a hard bargain with you on day {d}.",
+    MEK.REFUSED_ME: "{O} refused your offer on day {d}.",
+    MEK.I_REFUSED: "You refused {os} offer on day {d}.",
+    MEK.SHIRKED_IN_MY_HUNT: "{O} held back in your hunt on day {d}.",
+    MEK.WORKED_IN_MY_HUNT: "{O} worked hard in your hunt on day {d}.",
 }
-NEGATIVE_KINDS = ("robbed_me", "refused_me", "shirked_in_my_hunt")
-HUNT_KINDS = ("shirked_in_my_hunt", "worked_in_my_hunt")
+NEGATIVE_KINDS = (MEK.ROBBED_ME, MEK.REFUSED_ME, MEK.SHIRKED_IN_MY_HUNT)
+HUNT_KINDS = (MEK.SHIRKED_IN_MY_HUNT, MEK.WORKED_IN_MY_HUNT)
 MAX_TARGETS = 4
 
 OFFER_NOTES = {
@@ -75,24 +67,12 @@ ACCEPT_VERDICTS = {
 
 # ---- genes ------------------------------------------------------------------
 
-def other(r: str) -> str:
-    return "wood" if r == "food" else "food"
-
-
-def level(g: float) -> int:
-    return min(4, floor(5 * g))
-
-
-def gather_mult(genome, r: str) -> float:
-    return 0.5 + genome.spec if r == "food" else 1.5 - genome.spec
-
-
-def persona(genome, genes: tuple[str, ...], mode: str = "gated") -> str:
+def persona(genome, genes: tuple[Gene, ...], mode: str = "gated") -> str:
     if mode == "none":
         return ""
     if mode == "full":
-        genes = GENES
-    return " ".join(PERSONA[g][level(getattr(genome, g))] for g in genes)
+        genes = Gene.asdict()
+    return " ".join(PERSONA[g][level(genome[g])] for g in genes)
 
 
 # ---- labels (§3.4) ----------------------------------------------------------
@@ -114,6 +94,7 @@ def health_status(h: int) -> str:
 
 
 def wealth_label(w: int) -> str:
+    # TODO: magic numbers. Add to configuration???
     return "rich" if w >= 8 else "poor" if w <= 3 else "of average wealth"
 
 
@@ -137,17 +118,16 @@ def recent_events(memory, day: int, window: int, kinds=None, other_id: int | Non
     """Memory events within `window` days, most recent first."""
     return [
         ev for ev in reversed(memory)
-        if day - ev[0] <= window
-        and (kinds is None or ev[2] in kinds)
-        and (other_id is None or ev[1] == other_id)
+        if day - ev.day <= window
+        and (kinds is None or ev.kind in kinds)
+        and (other_id is None or ev.other_id == other_id)
     ]
 
 
-def event_sentence(event, named: bool = True) -> str:
-    d, other_id, kind, resource = event
-    name = f"Agent {other_id}" if named else None
-    text = EVENT_TEMPLATES[kind].format(
-        O=name or "", o=name or "them", os=f"{name}'s" if name else "their", d=d, r=resource
+def event_sentence(e, named: bool = True) -> str:
+    name = f"Agent {e.other_id}" if named else None
+    text = EVENT_TEMPLATES[e.kind].format(
+        O=name or "", o=name or "them", os=f"{name}'s" if name else "their", d=e.day, r=e.details.value
     ).strip()
     return _cap(text)
 
@@ -172,10 +152,10 @@ def assessment(h_self: int, h_other: int) -> tuple[str, str, str]:
 # ---- core sentences (§6.3) --------------------------------------------------
 
 def needs_sentence(stock: dict, need: dict) -> str:
-    lacking = [r for r in RESOURCES if stock[r] < need[r]]
+    lacking = [r for r in Resource if stock[r] < need[r]]
     if not lacking:
         return "You have enough for tonight."
-    return f"You lack {' and '.join(lacking)} for tonight."
+    return f"You lack {' and '.join(r.value for r in lacking)} for tonight."
 
 
 def season_word(mult: float) -> str:
@@ -183,7 +163,7 @@ def season_word(mult: float) -> str:
 
 
 def season_sentence(season: dict) -> str:
-    return f"Food is {season_word(season['food'])} and wood is {season_word(season['wood'])} this season."
+    return f"Food is {season_word(season[Resource.FOOD])} and wood is {season_word(season[Resource.WOOD])} this season."
 
 
 def core_sentence(village, agent) -> str:
@@ -191,7 +171,7 @@ def core_sentence(village, agent) -> str:
     return (
         f"You live in a village of {village.n_alive} people, day {village.day} of {cfg.D}. "
         f"Health {agent.health}/{cfg.health_max}. "
-        f"You have {agent.stock['food']} food and {agent.stock['wood']} wood; tonight you need 1 of each. "
+        f"You have {agent.stock[Resource.FOOD]} food and {agent.stock[Resource.WOOD]} wood; tonight you need 1 of each. "
         f"{needs_sentence(agent.stock, cfg.need)} {season_sentence(village.season)}"
     )
 
@@ -207,7 +187,7 @@ def _num(x: float) -> str:
 
 
 def _wealth(agent) -> int:
-    return agent.stock["food"] + agent.stock["wood"]
+    return agent.stock[Resource.FOOD] + agent.stock[Resource.WOOD]
 
 
 def _agent_list(ids: list[int]) -> str:
@@ -238,6 +218,7 @@ def _relation(village, agent, other_id: int, named: bool) -> str | None:
 
 
 def _memories(village, agent, kinds=None) -> list[str]:
+    # TODO: Change cfg, should be imported from config.py
     cfg = village.cfg
     if not cfg.render_memory:
         return []
@@ -254,11 +235,11 @@ def _hunt_sentence(hunt) -> str:
 
 
 def _congestion_sentence(congestion: dict) -> str:
-    places = {"food": "fields", "wood": "forest"}
-    crowded = [r for r in RESOURCES if congestion.get(r, 1.0) < 0.75]
+    places = {Resource.FOOD: "fields", Resource.WOOD: "forest"}
+    crowded = [r for r in Resource if congestion[r] < 0.75]
     if not crowded:
         return ""
-    verb = "was" if crowded == ["wood"] else "were"
+    verb = "was" if crowded == [Resource.WOOD] else "were"
     return f"Yesterday the {' and the '.join(places[r] for r in crowded)} {verb} crowded and yields were low."
 
 
@@ -276,15 +257,15 @@ def raid_candidates(village, agent) -> list:
     by_id = {a.id: a for a in others}
     ids: list[int] = []
     for ev in recent_events(agent.memory, village.day, village.cfg.memory_days, NEGATIVE_KINDS):
-        if ev[1] in by_id:
-            ids.append(ev[1])
+        if ev.other_id in by_id:
+            ids.append(ev.other_id)
             break
     for pick in (max(others, key=_wealth), min(others, key=lambda a: a.health)):
         if pick.id not in ids:
             ids.append(pick.id)
     rest = [a.id for a in others if a.id not in ids]
     if rest:
-        ids.append(rest[int(village.rng.integers(len(rest)))])
+        ids.append(rest[int(village.rng.integers(len(rest)))]) # TODO: No tentiendo que es esto
     return [by_id[i] for i in ids[:MAX_TARGETS]]
 
 
@@ -299,15 +280,15 @@ def morning(village, agent) -> tuple[str, dict]:
         _raids_sentence(y.raids),
         *_memories(village, agent),
     ]
-    state = _state(village, agent, (AGGRESSION, RISK, SPECIALIZATION), situation)
+    state = _state(village, agent, (Gene.AGGRESSION, Gene.RISK, Gene.SPECIALIZATION), situation)
 
-    expected = {r: cfg.base_yield * gather_mult(agent.genome, r) * village.season[r] for r in RESOURCES}
+    expected = {r: cfg.base_yield * gather_mult(agent.genome, r) * village.season[r] for r in Resource}
     candidates = raid_candidates(village, agent)
     activity = {
-        "gather_food": f"Forage alone. Expect about {_num(expected['food'])} food. Safe. "
-                       f"{need_status(agent.stock['food'], 'food')}",
-        "gather_wood": f"Cut wood alone. Expect about {_num(expected['wood'])} wood. Safe. "
-                       f"{need_status(agent.stock['wood'], 'wood')}",
+        "gather_food": f"Forage alone. Expect about {_num(expected[Resource.FOOD])} food. Safe. "
+                       f"{need_status(agent.stock[Resource.FOOD], Resource.FOOD.value)}",
+        "gather_wood": f"Cut wood alone. Expect about {_num(expected[Resource.WOOD])} wood. Safe. "
+                       f"{need_status(agent.stock[Resource.WOOD], Resource.WOOD.value)}",
         "hunt": f"Join the group hunt. If enough hunters work hard, every hunter gets {cfg.hunt_payout} food. "
                 "If it fails you get nothing today.",
     }
@@ -359,7 +340,7 @@ def effort(village, agent, party, threshold) -> tuple[str, dict]:
             situation.append(f"{_agent_list(reliable)} {verb}.")
     situation.append(_hunt_sentence(village.yesterday.hunt))
     situation += _memories(village, agent, HUNT_KINDS)
-    state = _state(village, agent, (ALTRUISM,), situation)
+    state = _state(village, agent, (Gene.ALTRUISM,), situation)
 
     payout = min(cfg.hunt_payout, floor(cfg.hunt_supply_per_capita * village.n_alive / m))
     questions = {"effort": {
@@ -380,7 +361,7 @@ def defend(village, agent, attacker) -> tuple[str, dict]:
     verdict, fight_note, yield_note = assessment(agent.health, attacker.health)
     situation = [f"Agent {attacker.id} is trying to rob you. {verdict}",
                  _relation(village, agent, attacker.id, named=True)]
-    state = _state(village, agent, (AGGRESSION, RISK), [s for s in situation if s])
+    state = _state(village, agent, (Gene.AGGRESSION, Gene.RISK), [s for s in situation if s])
 
     questions = {"defend": {"type": "choice", "instructions": "What do you do?", "criteria": {
         "fight": f"Fight back. {fight_note} The loser loses half of their stock and {village.cfg.fight_dmg} health.",
@@ -394,14 +375,14 @@ def offer(village, proposer, partner, r, offers) -> tuple[str, dict]:
     o, q = other(r), partner.id
     rep = _reputation(village, partner)
     situation = [
-        f"You have no {r} for tonight and spare {o}. Agent {q} has spare {r}" + (f" and is {rep}." if rep else "."),
+        f"You have no {r.value} for tonight and spare {o.value}. Agent {q} has spare {r}" + (f" and is {rep}." if rep else "."),
         _relation(village, proposer, q, named=True),
     ]
-    state = _state(village, proposer, (ALTRUISM,), [s for s in situation if s])
+    state = _state(village, proposer, (Gene.ALTRUISM,), [s for s in situation if s])
 
     criteria = {
-        name: f"Offer {give} {o} for {get} {r}. "
-              + OFFER_NOTES[name].format(q=q, left=proposer.stock[o] - give, o=o, r=r)
+        name: f"Offer {give} {o.value} for {get} {r.value}. "
+              + OFFER_NOTES[name].format(q=q, left=proposer.stock[o] - give, o=o.value, r=r.value)
         for name, (give, get) in offers.items()
     }
     questions = {"offer": {
@@ -413,15 +394,15 @@ def offer(village, proposer, partner, r, offers) -> tuple[str, dict]:
 
 
 def accept(village, responder, proposer, r, offer, give, get) -> tuple[str, dict]:
-    """Question `accept` (§6.4.5, noul); `r` is the resource the proposer lacks."""
+    """Question `accept` (§6.4.5, noul); `r` is the resource the proposer lacks (Resource enum)."""
     p = proposer.id
     rep = _reputation(village, proposer)
     situation = [
-        f"Agent {p} has no {r} for tonight and offers you {give} {other(r)} for {get} {r}. {ACCEPT_VERDICTS[offer]}",
+        f"Agent {p} has no {r.value} for tonight and offers you {give} {other(r).value} for {get} {r.value}. {ACCEPT_VERDICTS[offer]}",
         f"Agent {p} is {rep}." if rep else "",
         _relation(village, responder, p, named=True),
     ]
-    state = _state(village, responder, (ALTRUISM,), [s for s in situation if s])
+    state = _state(village, responder, (Gene.ALTRUISM,), [s for s in situation if s])
     return state, {"accept": {"type": "noul", "instructions": "Do you accept the trade?"}}
 
 
@@ -430,9 +411,9 @@ def gift(village, donor, recipient, r) -> tuple[str, dict]:
     n = recipient.id
     rep = _reputation(village, recipient)
     situation = [
-        f"Agent {n} has no {r} for tonight and will lose health. You have more {r} than you need.",
+        f"Agent {n} has no {r.value} for tonight and will lose health. You have more {r.value} than you need.",
         f"Agent {n} is {rep}." if rep else "",
         _relation(village, donor, n, named=True),
     ]
-    state = _state(village, donor, (ALTRUISM,), [s for s in situation if s])
-    return state, {"gift": {"type": "noul", "instructions": f"Do you give Agent {n} one {r}?"}}
+    state = _state(village, donor, (Gene.ALTRUISM,), [s for s in situation if s])
+    return state, {"gift": {"type": "noul", "instructions": f"Do you give Agent {n} one {r.value}?"}}
