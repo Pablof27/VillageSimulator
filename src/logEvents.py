@@ -1,7 +1,7 @@
 from enum import Enum
+from typing import Literal
 from dataclasses import dataclass, asdict
 import json
-from phase import Phase
 
 class LogEventType(Enum):
     decision = "decision"
@@ -19,7 +19,7 @@ class LogEvent:
     run: str
     gen: int
     day: int
-    phase: Phase
+    phase: Literal["morning", "gathering", "hunting", "raid", "trade", "gift", "night"]
     event_type: LogEventType
     payload: dict
 

@@ -991,7 +991,7 @@ def run_day(v: Village, brain: Brain, rng, log):
         factor = min(1.0, supply / sum(raws.values())) if raws else 1.0
         v.yesterday.congestion[r] = factor
         for a in gatherers:
-            got = sround(raws[a.id] * factor, rng); a.stock[r] += got
+            got = oundsround(raws[a.id] * factor, rng); a.stock[r] += got
             injured = a.route == "far" and rng.random() < v.cfg.far_injury_p
             if injured: a.health -= v.cfg.far_injury_dmg
             log.gather(a, r, a.route, raws[a.id], factor, got, injured)

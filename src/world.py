@@ -1,5 +1,6 @@
-from genes import Genome
+from genes import Genome, Gene
 from enum import Enum
+from typing import Literal
 from dataclasses import dataclass, field
 from logEvents import LogEvent
 from resources import Resource
@@ -41,8 +42,8 @@ class Agent:
     days_alive: int = 0
     record: Record = field(default_factory=Record)
     memory: list[MemoryEvent] = field(default_factory=list)
-    activity: str | None = None
-    route: str | None = None
+    activity: Literal["gather_food", "gather_wood", "rest", "raid"] | None = None
+    route: Literal["near", "far"] | None = None
     target: int | None = None
     traded_today: bool = False
     asked_gift_today: set[str] = field(default_factory=set)
@@ -76,3 +77,7 @@ class Village:
 
 def living_others(village, agent: Agent) -> list[Agent]:
     return [a for a in village.agents if a.alive and a.health > 0 and a.id != agent.id]
+
+def mult_r(agent: Agent, r: Resource) -> float:
+    g_spec = agent.genome[Gene.SPECIALIZATION]
+    return 0.5 + g_spec if r == Resource.FOOD else 1.5 - g_spec
