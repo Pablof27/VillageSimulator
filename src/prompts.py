@@ -43,7 +43,7 @@ def season_sentence(season: dict) -> str:
 
 def core_sentence(cfg: Config, village, agent) -> str:
     return (
-        f"You live in a village of {village.n_alive} people, day {village.day} of {cfg.population.D}. "
+        f"You live in a village of {village.n_alive} people, day {village.day_count} of {cfg.population.D}. "
         f"Health {agent.health}/{cfg.agent.health_max}. "
         f"You have {agent.stock[Resource.FOOD]} food and {agent.stock[Resource.WOOD]} wood; tonight you need 1 of each. "
         f"{needs_sentence(agent.stock, cfg.agent.need)} {season_sentence(village.season)}"
@@ -154,7 +154,7 @@ def offer(cfg: Config, village, proposer, partner, r, offers) -> tuple[str, dict
     o, q = other(r), partner.id
     rep = _reputation(cfg, partner)
     situation = [
-        f"You have no {r.value} for tonight and spare {o.value}. Agent {q} has spare {r}" + (f" and is {rep}." if rep else "."),
+        f"You have no {r.value} for tonight and spare {o.value}. Agent {q} has spare {r.value}" + (f" and is {rep}." if rep else "."),
         _relation(cfg, village, proposer, q, named=True),
     ]
     state = _state(cfg, village, proposer, (Gene.ALTRUISM,), [s for s in situation if s])
@@ -224,13 +224,13 @@ def _reputation(cfg: Config, other_agent) -> str | None:
 def _relation(cfg: Config, village, agent, other_id: int, named: bool) -> str | None:
     if not cfg.prompts.render_memory:
         return None
-    return relation_sentence(agent.memory, other_id, village.day, cfg.memory.days, named)
+    return relation_sentence(agent.memory, other_id, village.day_count, cfg.memory.days, named)
 
 
 def _memories(cfg: Config, village, agent, kinds=None) -> list[str]:
     if not cfg.prompts.render_memory:
         return []
-    events = recent_events(agent.memory, village.day, cfg.memory.days, kinds)
+    events = recent_events(agent.memory, village.day_count, cfg.memory.days, kinds)
     return [event_sentence(ev) for ev in reversed(events[:cfg.memory.render])]
 
 

@@ -47,6 +47,8 @@ class Agent:
     target: int | None = None
     traded_today: bool = False
     asked_gift_today: set[str] = field(default_factory=set)
+    # injury | fight | hunt_exhaustion | starvation; the last one of the day is the cause of death.
+    last_damage: str | None = None
 
     @property
     def wealth(self) -> int:
@@ -55,7 +57,7 @@ class Agent:
 @dataclass
 class Hunt:
     took_place: bool
-    success: bool | None
+    success: bool | None = None
     contributors: int = 0
     party_size: int = 0
 
@@ -73,6 +75,13 @@ class Village:
     season: dict[Resource, float]
     yesterday: Day
     log: list[LogEvent]
+
+    @property
+    def n_alive(self) -> int:
+        return sum(a.alive for a in self.agents)
+
+    def agent(self, agent_id: int) -> Agent:
+        return next(a for a in self.agents if a.id == agent_id)
 
 
 def living_others(village, agent: Agent) -> list[Agent]:
