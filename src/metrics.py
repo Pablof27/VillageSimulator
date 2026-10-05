@@ -10,7 +10,6 @@ GENE_COLS = {Gene.AGGRESSION: "agg", Gene.ALTRUISM: "alt", Gene.RISK: "risk", Ge
 DEATH_COLS = {"starvation": "deaths_starvation", "injury": "deaths_injury",
               "fight": "deaths_fight", "hunt_exhaustion": "deaths_hunt"}
 OFFERS = ("generous", "fair", "greedy")
-# (gene column, personal-rate column) pairs whose Spearman correlation validates gene expression.
 CORRELATIONS = {"corr_agg_raid": ("agg", "raid_rate"), "corr_alt_gift": ("alt", "gift_rate"),
                 "corr_alt_contrib": ("alt", "contrib_rate"), "corr_risk_far": ("risk", "far_rate")}
 NAN = float("nan")
@@ -60,7 +59,7 @@ def agent_metrics(gen: int, agents, by_type: dict) -> list[dict]:
     for a in agents:
         c = counts[a.id]
         rows.append({
-            "gen": gen, "agent": a.id,
+            "gen": gen, "agent": a.id, "parents": ";".join(map(str, a.parents)),
             **{col: a.genome[g] for g, col in GENE_COLS.items()},
             "alive": int(a.alive), "days_alive": a.days_alive, "health_end": a.health, "wealth_end": a.wealth,
             "raids": c["raids"], "raid_rate": _ratio(c["raids"], a.days_alive),
@@ -92,6 +91,7 @@ def _population_stats(survivors, deaths: list[dict]) -> dict:
     wealth = [a.wealth for a in survivors]
     return {
         "survivors": len(survivors),
+        "collapse": int(len(survivors) < 2),
         **{col: causes[cause] for cause, col in DEATH_COLS.items()},
         "gini_wealth": gini(wealth),
         "mean_health_end": _mean([a.health for a in survivors]),
@@ -112,7 +112,6 @@ def _hunt_stats(hunts: list[dict], agent_days: int) -> dict:
         "hunt_participation": _ratio(sum(len(e["party"]) for e in hunts), agent_days),
         "contribution_rate": _contribution_rate(held),
         "hunt_success_rate": _mean([e["success"] for e in held]),
-        # §8.4 reputation-based cooperation: does a known shirker in the party lower contribution?
         "contrib_rate_with_shirker": _contribution_rate(with_shirker),
         "contrib_rate_without_shirker": _contribution_rate(without_shirker),
     }
@@ -130,7 +129,6 @@ def _trade_stats(trades: list[dict], agent_days: int) -> dict:
 def _gift_stats(gifts: list[dict]) -> dict:
     return {
         "gift_rate": _mean([e["given"] for e in gifts]),
-        # §8.4 reciprocity: P(give | the recipient gave to me recently) vs otherwise.
         "gift_rate_reciprocal": _mean([e["given"] for e in gifts if e["reciprocal"]]),
         "gift_rate_nonreciprocal": _mean([e["given"] for e in gifts if not e["reciprocal"]]),
     }

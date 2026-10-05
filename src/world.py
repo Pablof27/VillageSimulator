@@ -47,8 +47,8 @@ class Agent:
     target: int | None = None
     traded_today: bool = False
     asked_gift_today: set[str] = field(default_factory=set)
-    # injury | fight | hunt_exhaustion | starvation; the last one of the day is the cause of death.
     last_damage: str | None = None
+    parents: tuple[int, ...] = ()
 
     @property
     def wealth(self) -> int:

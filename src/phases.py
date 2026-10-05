@@ -26,7 +26,8 @@ def run_day(cfg: Config, v: Village, brain, rng, log) -> None:
     _raids(cfg, v, alive, brain, rng, log)
     if cfg.market.enabled:
         _market(cfg, v, alive, brain, rng, log)
-    _gifts(cfg, v, alive, brain, rng, log)
+    if cfg.gifts.enabled:
+        _gifts(cfg, v, alive, brain, rng, log)
     _night(cfg, v, alive, log)
 
 

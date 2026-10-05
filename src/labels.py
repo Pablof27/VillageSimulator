@@ -38,7 +38,6 @@ def health_status(h: int) -> str:
 
 
 def wealth_label(w: int) -> str:
-    # TODO: magic numbers. Add to configuration???
     return "rich" if w >= 8 else "poor" if w <= 3 else "of average wealth"
 
 

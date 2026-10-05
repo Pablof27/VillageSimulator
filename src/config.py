@@ -74,7 +74,6 @@ class GatheringConfig:
     def __post_init__(self):
         _check(self.base_yield > 0 and self.supply_per_capita > 0, "gathering yields must be > 0")
         _check(self.far_multiplier >= 1, "gathering.far_multiplier must be >= 1")
-        # Must be > 0: the route prompt renders it as "1 in {1/p}".
         _check(0 < self.far_injury_p <= 1, "gathering.far_injury_p must be in (0, 1]")
         _check(self.far_injury_dmg >= 0, "gathering.far_injury_dmg must be >= 0")
 
@@ -226,7 +225,6 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict | None) -> "Config":
-        """Build from a (possibly partial) dict; missing keys keep their defaults, unknown keys raise."""
         data = dict(data or {})
         kwargs = {}
         for f in fields(cls):
@@ -245,7 +243,6 @@ class Config:
         return cls(**kwargs)
 
     def to_dict(self) -> dict:
-        """Plain YAML/JSON-serializable dict (enum keys -> strings, tuples -> lists)."""
         return _plain(asdict(self))
 
 

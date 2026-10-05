@@ -109,7 +109,7 @@ def _specialization(gens, agents, out) -> Path:
     return _save(fig, out / "7_specialization.png")
 
 
-# ---- helpers ----------------------------------------------------------------
+# PRIVATE
 
 def _read_csv(path: Path) -> list[dict[str, float]]:
     with open(path, newline="", encoding="utf-8") as f:
@@ -119,7 +119,10 @@ def _read_csv(path: Path) -> list[dict[str, float]]:
 def _to_float(value: str) -> float:
     if value in ("True", "False"):
         return float(value == "True")
-    return float(value) if value else np.nan
+    try:
+        return float(value)
+    except ValueError:
+        return np.nan
 
 
 def _col(rows: list[dict], key: str) -> np.ndarray:
