@@ -6,7 +6,8 @@ from config import Config
 from labels import recent_events
 from resources import other, Resource
 from world import MemoryEventKind as MEK, living_others, Village,  mult_r, Hunt, MemoryEvent
-from prompts import morning, effort, defend, offer, accept, gift
+import policies
+import prompts
 from brain import decide
 
 NEGATIVE_KINDS = (MEK.ROBBED_ME, MEK.REFUSED_ME, MEK.SHIRKED_IN_MY_HUNT)
@@ -44,6 +45,11 @@ def _ask(v, a, phase, state, questions, brain, log) -> dict:
     return answers
 
 
+def catalogue(cfg: Config):
+    """The decision catalogue: analytic policies (§6.7) for `brain.kind: policy`, Laya prompts (§6.4) otherwise."""
+    return policies if cfg.brain.kind == "policy" else prompts
+
+
 # ---- 1. MORNING -------------------------------------------------------------
 
 def _morning(cfg, v, alive, brain, rng, log):
@@ -52,7 +58,7 @@ def _morning(cfg, v, alive, brain, rng, log):
 
 
 def _plan_day(cfg, v, a, brain, rng, log):
-    state, questions = morning(cfg, v, a, _raid_candidates(cfg, v, a, rng))
+    state, questions = catalogue(cfg).morning(cfg, v, a, _raid_candidates(cfg, v, a, rng))
     res = _ask(v, a, "morning", state, questions, brain, log)
     a.activity = res["activity"].chosen
     a.route = res["route"].chosen
@@ -143,7 +149,7 @@ def _run_hunt(cfg, v, party, n_alive, brain, log) -> Hunt:
 
 
 def _choose_effort(cfg, v, a, party, threshold, brain, log) -> str:
-    state, qs = effort(cfg, v, a, party, threshold)
+    state, qs = catalogue(cfg).effort(cfg, v, a, party, threshold)
     return _ask(v, a, "hunt", state, qs, brain, log)["effort"].chosen
 
 
@@ -173,7 +179,7 @@ def _raids(cfg, v, alive, brain, rng, log):
 def _raid(cfg, v, a, t, brain, rng, log):
     if a.health <= 0 or not t.alive or t.health <= 0:
         return
-    state, qs = defend(cfg, v, t, a)
+    state, qs = catalogue(cfg).defend(cfg, v, t, a)
     defence = _ask(v, t, "raid", state, qs, brain, log)["defend"].chosen
     loot, dmg_to, attacker_won = _resolve_raid(cfg, a, t, defence, rng)
     a.record.raids += 1
@@ -215,10 +221,10 @@ def _try_trade(cfg, v, alive, p, r, brain, rng, log):
     offers = _affordable_offers(cfg, p, q, r)
     if not offers:
         return
-    state, qs = offer(cfg, v, p, q, r, offers)
+    state, qs = catalogue(cfg).offer(cfg, v, p, q, r, offers)
     offered = _ask(v, p, "market", state, qs, brain, log)["offer"].chosen
     give, get = offers[offered]
-    state, qs = accept(cfg, v, q, p, r, offered, give, get)
+    state, qs = catalogue(cfg).accept(cfg, v, q, p, r, offered, give, get)
     accepted = _ask(v, q, "market", state, qs, brain, log)["accept"].chosen == "yes"
     _settle_trade(v.day_count, p, q, r, offered, give, get, accepted)
     log.emit("trade", "market", v.day_count, proposer=p.id, responder=q.id, resource=r,
@@ -270,7 +276,7 @@ def _ask_for_gift(cfg, v, alive, n, r, brain, rng, log):
     d = rng.choice(donors)
     d.asked_gift_today.add(r)
     reciprocal = bool(recent_events(d.memory, v.day_count, cfg.memory.days, (MEK.GAVE_ME,), n.id))
-    state, qs = gift(cfg, v, d, n, r)
+    state, qs = catalogue(cfg).gift(cfg, v, d, n, r)
     given = _ask(v, d, "night", state, qs, brain, log)["gift"].chosen == "yes"
     if given:
         _give(v.day_count, d, n, r)

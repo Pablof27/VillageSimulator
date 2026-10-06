@@ -166,8 +166,9 @@ class PromptsConfig:
 
 @dataclass
 class BrainConfig:
-    kind: Literal["laya", "mock"] = "laya"
+    kind: Literal["laya", "mock", "policy"] = "laya"
     model: str = "aac6fef/laya-mlx"
+    policy_weights: str = "configs/policy_weights.yaml"  # used when kind = policy (§6.7)
     dtype: str = "float16"
     device: str = "gpu"
     batch_size: int = 8
@@ -177,7 +178,9 @@ class BrainConfig:
     cache: bool = False
 
     def __post_init__(self):
-        _one_of(self.kind, ("laya", "mock"), "brain.kind")
+        _one_of(self.kind, ("laya", "mock", "policy"), "brain.kind")
+        _check(self.kind != "policy" or Path(self.policy_weights).is_file(),
+               f"brain.policy_weights: file not found: {self.policy_weights}")
         _check(self.batch_size >= 1, "brain.batch_size must be >= 1")
         _check(self.tau >= 0, "brain.tau must be >= 0 (0 = argmax)")
 

@@ -15,6 +15,7 @@ This document is a complete implementation specification. It is written so that 
 4. [Genome](#4-genome)
 5. [The day cycle](#5-the-day-cycle)
 6. [Decision engine integration](#6-decision-engine-integration)
+   - [6.7 Alternative engine: analytic policies](#67-alternative-engine-analytic-policies-policiespy)
 7. [Evolution](#7-evolution)
 8. [Logging, metrics and analysis](#8-logging-metrics-and-analysis)
 9. [Experiments](#9-experiments)
@@ -564,6 +565,201 @@ Question (`noul`), instructions: `"Do you give Agent {n} one {r}?"`
 
 `24 agents × 20 days × 0.2 s ≈ 100 s per generation → 40 generations ≈ 65–70 min` for the baseline, on the M3 Pro. Everything is sequential and GPU-bound; do not use multiprocessing (each process would load a ≈1 GB model and compete for the GPU). `CachedBrain` typically cuts this by 3–10× after the first generation because prompts are functions of discretized features. `compile=True, cache_prompts=True, pad_to_multiple=16` in `laya.load` gives a further ≈5–10 %. Cross-agent batching via `agent.prepare / collate_items / agent.forward` is possible but is an optimization for later.
 
+### 6.7 Alternative engine: analytic policies (`policies.py`)
+
+A second decision engine that makes **the same decisions from the same information** as the prompt catalogue (§6.4), but maps the situation **directly to a probability distribution** with an explicit formula instead of rendering text for Laya. The simulation then samples from that distribution exactly as it samples from Laya's.
+
+**Why.**
+
+1. **Reference model.** Gene expression is guaranteed by construction (every E0 row passes), so policy runs answer *"what does evolution do when the genes are expressed exactly as intended?"*
+2. **Attribution.** Comparing Laya runs with policy runs (E11) separates phenomena caused by the game from phenomena caused by Laya's language priors. For example, the first Laya baseline runs showed a foraging bias (wood gathered < ½ as often as food) and a 26 % raid rate at neutral genes; neither is in the game rules.
+3. **Speed.** A decision costs microseconds instead of ≈55 ms, so a 40-generation run takes seconds. That makes multi-seed sweeps (E5, E9, E12) and larger `N` affordable, and lets us check that the game *can* produce the §8.4 phenomena before spending GPU hours.
+4. **Distillation (optional, E13).** Fitting the policy weights to Laya's logged decisions gives an interpretable, quantitative summary of what Laya actually responds to.
+
+#### 6.7.1 Design principles
+
+- **Same contract as `prompts.py`.** Same six functions, same arguments, same question keys and option labels. Each returns `(state, questions)`, so `phases.py`, `brain.py` (forced moves, validation, sharpening, sampling), logging, metrics and `calibrate.py` work unchanged. The differences: `state` is a JSON string of features, and every question carries its own distribution.
+- **Information parity.** A policy may use only information the corresponding prompt renders, discretized with the same thresholds (`labels.py`). It must never read another agent's exact stock, health or genes. The flags keep their meaning:
+
+  - `render_reputation: false` zeroes the reputation features;
+  - `render_memory: false` zeroes the memory and relation features;
+  - `persona_mode: none` sets every gene term to 0.
+
+  So E2 and E7 mean the same thing in both engines. `persona_mode: full` is treated as `gated`, because gene relevance is defined by the weight file.
+- **Gene relevance.** Gene terms appear only in decisions whose prompt renders that gene (§4.4 matrix).
+- **Interpretable parameters.** Every weight is a log-odds contribution (+1 ≈ ×2.7 odds). Weights live in a YAML file, not in code.
+- **Pure and deterministic.** No `rng` inside policies. All randomness stays in `brain.sample`, so both engines draw from the RNG identically (one draw per non-forced question) and seeds are comparable across engines.
+
+#### 6.7.2 The model: conditional logit
+
+For a `choice` question with legal options $O$:
+
+$$
+U(o) = \sum_k W_{o,k}\,x_k \;+\; \sum_j S_j\,y_j(o), \qquad p(o) = \frac{e^{U(o)}}{\sum_{o' \in O} e^{U(o')}}
+$$
+
+- $x_k$: **context features**, the same for every option, with one weight per option. The constant feature `bias` = 1.
+- $y_j(o)$: **option features**, which differ by option, with one shared weight. They are used where the options are other agents (`target`) or offers (`offer`).
+- `noul` questions are a two-option choice with $U(\text{no}) = 0$, so $p(\text{yes}) = \sigma(U(\text{yes}))$.
+- Illegal options (no `raid` without candidates, unaffordable offers) are simply absent and the softmax renormalizes. A single legal option is a forced move (§6.5), unchanged.
+- The policy's $p$ becomes `Answer.raw`, and brain sharpening with τ still applies. Policy probabilities are not flattened by calibration temperatures, so **policy runs use τ = 1** (set in `configs/policy.yaml`); E4 can sweep τ in both engines.
+
+**Gene encoding.** `continuous` (default): $z_g = 2g - 1 \in [-1, 1]$. `level`: $z_g = (\text{level}(g) - 2)/2 \in \{-1, -½, 0, ½, 1\}$, the same 5-step discretization as the persona sentences; use it when comparing with Laya. A weight γ on $z_g$ moves the log-odds by $2γ$ between the two extreme genotypes.
+
+#### 6.7.3 Features
+
+All features are computed from the same inputs the matching prompt reads. The thresholds come from `labels.py` (see the refactor note in 6.7.6).
+
+| feature                                                                      | definition                                                                                                                                                                                                                                                  | mirrors (text the prompt renders)                   |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `bias`                                                                     | 1                                                                                                                                                                                                                                                           | —                                                  |
+| `urgency_food`, `urgency_wood`                                           | 1 if`stock[r] = 0`; 0.5 if 1–2; 0 if ≥ 3                                                                                                                                                                                                                | `need_status` in the gather options               |
+| `urgency_max`                                                              | max of the two                                                                                                                                                                                                                                              | needs sentence                                      |
+| `health_low`                                                               | 1 if health ≤ 3; 0.5 if 4–6; 0 otherwise                                                                                                                                                                                                                  | `health_status`                                   |
+| `yield_food`, `yield_wood`                                               | $E_r / \text{base\_yield} - 1$ with $E_r$ as in §6.4.1 (includes `g_spec` and season)                                                                                                                                                                | "Expect about E_r" + capability sentence            |
+| `crowded_food`, `crowded_wood`                                           | 1 if`yesterday.congestion[r] < 0.75`                                                                                                                                                                                                                      | congestion sentence                                 |
+| `hunt_prev`                                                                | +1 succeeded, −1 failed, 0 no hunt                                                                                                                                                                                                                         | yesterday's-hunt sentence                           |
+| `z_agg`, `z_alt`, `z_risk`                                             | gene encoding (0 if`persona_mode: none`)                                                                                                                                                                                                                  | persona sentences                                   |
+| `slack`                                                                    | $(m - \text{threshold}) / m$                                                                                                                                                                                                                              | party size and threshold in the effort instructions |
+| `shirker_frac`, `reliable_frac`                                          | fraction of hunt mates labelled*known shirker* / *reliable hunter*                                                                                                                                                                                      | reputation sentences in the effort situation        |
+| `hunt_memory`                                                              | (worked − shirked) /`memory_render` over the ≤ `memory_render` most recent hunt memories                                                                                                                                                              | rendered hunt memories                              |
+| `assess`                                                                   | +1*you are much stronger*, 0 *evenly matched*, −1 *attacker much stronger*                                                                                                                                                                           | `assessment`                                      |
+| `stake`                                                                    | min(1, wealth /`wealth_ref`)                                                                                                                                                                                                                              | "half of your stock"                                |
+| `deal`                                                                     | +1 generous (to the responder), 0 fair, −1 greedy                                                                                                                                                                                                          | accept verdict                                      |
+| `surplus`                                                                  | clip((`stock[r]` − `gift_spare_min`) / `gift_spare_min`, 0, 1)                                                                                                                                                                                       | "You have more r than you need"                     |
+| `friend` / `enemy` (w.r.t. the other agent)                              | the most recent memory event with that agent within`memory_days` is friendly (`gave_me`, `traded_fair`, `traded_generous_to_me`, `worked_in_my_hunt`) or hostile (`robbed_me`, `refused_me`, `traded_greedy_to_me`, `shirked_in_my_hunt`) | relation sentence                                   |
+| `refused`                                                                  | that most recent event is`refused_me`                                                                                                                                                                                                                     | relation sentence                                   |
+| `raider`, `generous` (other agent)                                       | `reputation_label` of that agent                                                                                                                                                                                                                          | reputation label                                    |
+| `rich` / `poor`, `strong` / `weak` (candidate)                       | `wealth_label` / `strength_label` of the candidate                                                                                                                                                                                                      | target option text                                  |
+| `value` (offer option)                                                     | `get − give` from the proposer's view: generous −1, fair 0, greedy +1                                                                                                                                                                                   | offer option text                                   |
+| `value_x_alt`, `value_x_refused`, `value_x_friend`, `value_x_raider` | `value` × `z_alt` / `refused` / `friend` / partner `raider`                                                                                                                                                                                      | persona + relation + reputation in the offer prompt |
+
+The interaction features (`value_x_*`) let altruism and history change the *slope* of the proposer's preference over offers, instead of favouring one offer label.
+
+#### 6.7.4 Default weights (`configs/policy_weights.yaml`)
+
+```yaml
+# Log-odds weights of the policy engine (SIMULATION_DESIGN.md §6.7). Unlisted features have weight 0.
+gene_encoding: continuous          # continuous: z = 2g - 1 | level: z = (level(g) - 2) / 2
+
+activity:                          # context weights per option
+  gather_food: {urgency_food: 2.0, yield_food: 1.0, crowded_food: -0.7}
+  gather_wood: {urgency_wood: 2.0, yield_wood: 1.0, crowded_wood: -0.7}
+  hunt:        {bias: -0.3, urgency_food: 1.0, hunt_prev: 0.6, z_risk: 0.5}
+  raid:        {bias: -1.0, z_agg: 2.5, z_risk: 0.5, urgency_max: 0.8, health_low: -1.5}
+  rest:        {bias: -2.0, health_low: 3.0, z_risk: -0.5}
+
+route:                             # near: U = 0
+  far:         {bias: -0.7, z_risk: 1.5, health_low: -1.5, urgency_max: 0.5}
+
+target:
+  candidate:   {rich: 1.0, poor: -1.0, weak: 0.8, strong: -0.8, enemy: 1.5, friend: -2.0, generous: -0.5}  # shared option weights
+  nobody:      {bias: 0.5, z_agg: -1.5}
+
+effort:                            # free_ride: U = 0
+  contribute:  {z_alt: 2.0, slack: -1.0, hunt_prev: 0.5, shirker_frac: -1.0, reliable_frac: 0.5,
+                hunt_memory: 0.8, health_low: -1.5}
+
+defend:                            # yield: U = 0
+  fight:       {bias: 0.3, assess: 1.5, z_agg: 1.0, z_risk: 1.0, enemy: 0.7, stake: 0.5, health_low: -1.0}
+
+offer:
+  each:        {value: 0.0, value_x_alt: -1.2, value_x_refused: -0.8, value_x_friend: -0.5, value_x_raider: 0.5}
+  fair:        {bias: 0.5}
+
+accept:                            # noul
+  yes:         {bias: 0.8, deal: 1.5, z_alt: 0.8, friend: 0.7, enemy: -1.2, raider: -0.5}
+
+gift:                              # noul
+  yes:         {bias: -1.0, z_alt: 2.0, friend: 1.5, enemy: -2.0, generous: 0.5, raider: -0.8, surplus: 0.5}
+```
+
+Two features are left out on purpose, by the information-parity rule: the gift prompt does not show the recipient's strength, so there is no `weak` term in `gift`; and the defend prompt does not show the attacker's reputation, so `defend` has no `raider`/`generous` terms.
+
+**How the defaults were chosen.** They are a starting point, not fitted values, and they follow three rules:
+
+- **(a)** At neutral genes, the probabilities in the E0 standard situation are of the same order as Laya's neutral persona (Appendix A, E0).
+- **(b)** Each gene moves its focal probability by ≥ 0.4 between the extreme genotypes, so E0 passes by a wide margin.
+- **(c)** Situational cues have effects of the same size as gene effects, so neither dominates selection.
+
+The tables below were computed from these weights, with the E0 standard situation: day 8 of 20, health 7, 2 food / 2 wood, `g_spec` 0.5, party of 5 with threshold 3, evenly matched attacker, fair deal, donor holding 4.
+
+| decision (gene) | focal             | z = −1 | −½ | 0    | +½  | +1   |
+| --------------- | ----------------- | ------- | ---- | ---- | ---- | ---- |
+| activity (agg)  | P(raid)           | 0.01    | 0.02 | 0.07 | 0.22 | 0.50 |
+| route (risk)    | P(far)            | 0.12    | 0.23 | 0.39 | 0.57 | 0.74 |
+| effort (alt)    | P(contribute)     | 0.08    | 0.20 | 0.40 | 0.65 | 0.83 |
+| defend (agg)    | P(fight)          | 0.38    | 0.50 | 0.62 | 0.73 | 0.82 |
+| offer (alt)     | P(greedy)         | 0.63    | 0.45 | 0.27 | 0.14 | 0.06 |
+| accept (alt)    | P(yes), fair deal | 0.50    | 0.60 | 0.69 | 0.77 | 0.83 |
+| gift (alt)      | P(yes)            | 0.06    | 0.14 | 0.30 | 0.54 | 0.76 |
+
+| situational effect (genes neutral)         | result                                                                                          |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| activity at reference                      | food 0.37, wood 0.37, hunt 0.17, raid 0.07, rest 0.02                                           |
+| no wood vs 3 wood → P(gather_wood)        | 0.60 vs 0.18 (food: 0.57 vs 0.19)                                                               |
+| woodcutter (`g_spec` = 0.1)              | gather_wood 0.52, gather_food 0.23                                                              |
+| health 2 → P(rest)                        | 0.29 (vs 0.02)                                                                                  |
+| defend: much weaker / even / much stronger | P(fight) 0.27 / 0.62 / 0.88                                                                     |
+| accept: generous / fair / greedy offer     | 0.91 / 0.69 / 0.33; fair offer from someone who robbed you: 0.40                                |
+| offer after this partner refused you       | generous 0.51, fair 0.38, greedy 0.10 (vs 0.27 / 0.45 / 0.27)                                   |
+| gift to someone who gave you food          | 0.66 (vs 0.30)                                                                                  |
+| target, Appendix C candidates              | robbed-you 0.58, rich 0.13, average 0.11, friend 0.01, nobody 0.18 (nobody 0.49 at z_agg = −1) |
+
+**Worked example: Appendix C's Agent 7 under the policy engine.**
+
+- **Features:** `z_agg` = 0.82, `z_risk` = 0.10; 2 food / 0 wood, so `urgency_food` = 0.5, `urgency_wood` = 1, `urgency_max` = 1. `g_spec` 0.15 gives `yield_food` = −0.35, `yield_wood` = +0.35. Yesterday's hunt failed, so `hunt_prev` = −1.
+- **Utilities:** gather_food 0.65, gather_wood 2.35, hunt −0.35, raid 1.90, rest −2.05.
+- **Distribution:** gather_wood **0.53**, raid 0.34, gather_food 0.10, hunt 0.04, rest 0.01.
+
+The urgent wood need and the woodcutter capability now outweigh the raider persona. Laya chose `raid` with 0.69 for the same agent: exactly the kind of difference E11 measures.
+
+#### 6.7.5 Output format
+
+`state` is a JSON string, so `decisions.jsonl` and `CachedBrain` keys keep working:
+
+```json
+{"engine": "policy", "decision": "morning", "agent": 7,
+ "features": {"urgency_food": 0.5, "urgency_wood": 1.0, "z_agg": 0.82, "yield_wood": 0.35, "hunt_prev": -1, "...": 0}}
+```
+
+Each question keeps `type`, `instructions` (a short description) and `criteria` (the same labels as the prompt, with one-line descriptions) and adds:
+
+```json
+"probabilities": {"gather_food": 0.10, "gather_wood": 0.53, "hunt": 0.04, "raid": 0.34, "rest": 0.01},
+"utilities":     {"gather_food": 0.65, "gather_wood": 2.35, "hunt": -0.35, "raid": 1.90, "rest": -2.05},
+"terms":         {"raid": {"bias": -1.0, "z_agg": 2.05, "z_risk": 0.05, "urgency_max": 0.8}, "...": {}}
+```
+
+`terms` holds every $w \cdot x$ contribution, so each logged decision explains itself ("Agent 7 raided: +2.05 from aggression, +0.8 from need").
+
+#### 6.7.6 Integration
+
+| module | change |
+| --- | --- |
+| `policies.py` (new) | `morning`, `effort`, `defend`, `offer`, `accept`, `gift` with the exact signatures of `prompts.py`; feature builders `features_<decision>(cfg, village, agent, ...) -> dict[str, float]` (plus `candidate_features` and `offer_features` for option features); generic `_choice(...)` and `_noul(...)`; `load_weights(path)` (memoized per path, validated against `SCHEMA`, which also enforces the §4.4 gene relevance: e.g. `z_alt` is rejected in `activity`). |
+| `labels.py` | **Thresholds exist once:** numeric helpers `need_level`, `health_level`, `wealth_level`, `strength_level`, `assessment_level`, `reputation_kind`, `relation_kind(memory, other_id, day, window) -> "friend" \| "enemy" \| "refused" \| None`, and `CROWDED_BELOW`. The text functions are built on them, so parity holds by construction. |
+| `brain.py` | `PolicyBrain(SamplingBrain)`: `probabilities(state, questions)` returns `{name: q["probabilities"]}`. `make_brain` builds it for `kind: policy` and validates the weights file at start-up. No cache needed. |
+| `phases.py` | `catalogue(cfg)` returns `policies` for `kind: policy` and `prompts` otherwise; the six call sites use `catalogue(cfg).morning(...)` and so on. No other change. |
+| `calibrate.py` | Uses `catalogue(cfg)`, so `calibrate --config configs/policy.yaml` runs E0 on the weights. |
+| `config.py` | `brain.kind: laya \| mock \| policy`; `brain.policy_weights` (path, default `configs/policy_weights.yaml`). With `kind: policy` the file must exist. Unknown decisions, blocks or features raise, and every weight must be finite (checked by `policies.load_weights`). YAML reads `yes:` as a boolean; the loader maps it back to `"yes"`. |
+| `configs/policy.yaml` (new) | The baseline with `brain: {kind: policy, tau: 1.0}`. |
+
+#### 6.7.7 Validation and tests
+
+- **Parity:** for random situations, `policies.X` and `prompts.X` return the same question keys and the same option label sets (including absent `raid`/`target` and the affordable-offer subset).
+- **Distributions:** finite, non-negative, summing to 1. Unknown features or options in the weights file raise at load time.
+- **Monotonicity:** each gene's focal probability is strictly monotone in $z$ with the E0 sign. With `calibrate`, every E0 row must PASS; a failure means a weights-file error.
+- **Flags:** with `render_memory: false` every memory and relation feature is 0; with `render_reputation: false` every reputation feature is 0; with `persona_mode: none` every $z$ is 0.
+- **Determinism:** same seed gives identical `events.jsonl` (ignoring latency and wall time). A Laya run and a policy run with the same seed draw the same number of RNG samples per day.
+- **Speed:** the 40 × 20 × 24 baseline completes in under 30 s.
+
+#### 6.7.8 Limitations
+
+- **Linear response.** The utilities are linear in the features, so the policy cannot reproduce Laya's threshold response to genes (only L4 moves; Appendix A.3). If needed, add level indicator features (`agg_L4`, …) with `gene_encoding: level`.
+- **Hand-set weights.** Their *absolute* sizes are arbitrary, so conclusions should rest on comparisons: across weight settings (E12) or against Laya (E11), not on one policy run.
+- **No language priors.** The policy has no foraging bias and no tendency toward raiding. That is the point of the control, but it also means policy villages are expected to starve less than Laya villages.
+
 ---
 
 ## 7. Evolution
@@ -740,6 +936,34 @@ Season schedule: days 11–20 of every generation `season[food] = 0.5` (variant:
 
 `brain.model: aac6fef/laya-multilingual-mlx` (1,024-token context, uncalibrated `T = 1.0` → sharper distributions, ≈2× faster). Re-run E0 first. Hypothesis: qualitatively similar dynamics; if not, the results depend on the checkpoint rather than on the game, which is itself a finding.
 
+### E11 — Policy engine vs Laya
+
+Run the same configs with `brain.kind: policy` (τ = 1, `configs/policy.yaml`) and with Laya, ≥ 3 seeds each. Compare gene trajectories, behaviour rates and the §8.4 indicators. Interpretation:
+
+- a phenomenon in **both** engines is a property of the game;
+- **only with Laya**: it comes from Laya's language priors;
+- **only with the policy**: Laya's weak channels (E0) block it.
+
+Use `gene_encoding: level` for the closest like-for-like comparison.
+
+### E12 — Policy ablations and sweeps
+
+Three variants:
+
+- **(a) All gene weights = 0.** An exact neutral-drift control. It is stronger than E7, because no residual prompt effect remains.
+- **(b) Remove one feature family at a time** (reputation, memory, urgency, congestion) to find which information sustains cooperation, trade and specialization.
+- **(c) Large grids.** The E5 and E9 grids with 10 seeds each, affordable only with this engine.
+
+### E13 — Distilled Laya (optional)
+
+Fit the policy to Laya's own decisions:
+
+1. Set `log.features: true`, so that every Laya `decision` event also logs the policy features. The features are cheap to compute.
+2. Fit a conditional logit to the logged choices by maximum likelihood: numpy Newton steps with an L2 penalty.
+3. Write the fitted weights to a YAML file and run the policy with them.
+
+If the dynamics match the Laya run, the feature set captures what Laya responds to. The fitted gene coefficients are also a quantitative alternative to E0.
+
 ### Later extensions (not in scope)
 
 Two villages with migration; a fifth "vengefulness" gene rendered in the target prompt; punishment (targeted raids on shirkers rewarded); heritable memory (children inherit parents' public labels); learning within a lifetime.
@@ -758,7 +982,8 @@ layalab/
   world.py         # Agent, Record, MemoryEvent, Village, season schedule
   labels.py        # all feature→text rules of §3.4 (pure functions, unit-tested)
   prompts.py       # the prompt catalogue of §6.4 (pure functions: (village, agent, ...) → (state, questions))
-  brain.py         # Brain protocol, LayaBrain, MockBrain, CachedBrain, sampling (§6.2)
+  policies.py      # analytic policy catalogue of §6.7 (same functions and outputs as prompts.py, with distributions)
+  brain.py         # Brain protocol, LayaBrain, MockBrain, CachedBrain, PolicyBrain, sampling (§6.2)
   phases.py        # morning, gathering, hunt, raids, market, night (§5)
   evolution.py     # fitness, selection, reproduce (§7)
   simulation.py    # run(config) → RunResult ; generation loop
@@ -768,6 +993,7 @@ layalab/
   cli.py           # `python -m layalab {calibrate,run,plot}`
 configs/
   baseline.yaml  anonymous.yaml  famine.yaml  tau_*.yaml  no_market.yaml  persona_blind.yaml ...
+  policy.yaml  policy_weights.yaml        # §6.7
 runs/<run_name>/   config.yaml  events.jsonl  decisions.jsonl  generations.csv  calibration.json  plots/
 tests/
 ```
@@ -798,6 +1024,12 @@ def defend(village, agent, attacker) -> tuple[str, dict]
 def offer(village, proposer, partner, r, offers) -> tuple[str, dict]
 def accept(village, responder, proposer, r, offer, give, get) -> tuple[str, dict]
 def gift(village, donor, recipient, r) -> tuple[str, dict]
+
+# policies.py  (§6.7; same six signatures as prompts.py, questions carry "probabilities")
+def features_morning(cfg, village, agent, candidates) -> dict[str, float]   # one builder per decision
+def choice(weights, context: dict, option_features: dict | None, labels) -> dict
+def noul(weights, context: dict) -> dict
+def load_weights(path) -> dict                                             # memoized, validated
 
 # brain.py
 def sharpen(p: dict[str, float], tau: float) -> dict[str, float]
@@ -831,6 +1063,7 @@ python -m layalab run --config configs/baseline.yaml --brain mock --generations 
 - **Sampling**: `τ = 0` equals argmax; `τ = 1` reproduces `p` in the limit (chi-square on 10k samples); `sharpen` preserves ranking.
 - **Determinism**: two runs with the same seed and `MockBrain` produce identical `events.jsonl`.
 - **End-to-end smoke**: 2 generations × 3 days with `LayaBrain` (marked `slow`).
+- **Policy engine**: parity with `prompts.py`, monotonicity, flags, E0 all PASS, speed (§6.7.7).
 
 ### 10.5 Milestones
 
@@ -838,28 +1071,30 @@ python -m layalab run --config configs/baseline.yaml --brain mock --generations 
 2. `prompts` + `LayaBrain`; token-budget tests; `calibrate` command; E0 iterated until criteria pass or channels are documented as weak.
 3. Logging, metrics, plots; E1 with 3 seeds.
 4. E7 control and E2; then the remaining experiments.
+5. `policies.py` + `PolicyBrain` + `labels.py` level helpers; E0 on the policy; E11 and E12 (E13 optional).
 
 ---
 
 ## 11. Design decisions and alternatives considered
 
-| decision              | chosen                                                                    | alternatives                                         | rationale                                                                                                                                                                                                                |
-| --------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Resources             | 2 (food, wood), both needed nightly                                       | 1 resource; 3+                                       | Two complementary needs are the minimum that makes specialization and trade meaningful; more resources multiply prompt options and calls.                                                                                |
-| Cooperation game      | Threshold public-goods "hunt" with observable effort                      | Linear PGG; pairwise iterated PD                     | Threshold game is the clearest "difficult resource that needs several people"; observability enables reputation, the interesting emergent channel.                                                                       |
-| Negotiation           | One-shot ultimatum, 3 fixed offers, need-driven only                      | Multi-round haggling; continuous prices via`score` | Laya cannot reason about prices (Appendix A.5); a small labelled offer set with environment verdicts is the largest bargaining space it can express a persona in.`score` was tested and showed no persona sensitivity. |
-| Aggression channel    | Raid = whole-day activity, victim chooses fight/yield, public record      | Raids as free actions; no defence choice             | Whole-day cost makes raiding a real trade-off; the defence choice gives risk/aggression genes another outlet even though it is currently weak.                                                                           |
-| Gene expression       | Only decision-relevant genes rendered, first in the state                 | Full persona everywhere                              | Measured: stacking sentences dilutes and can invert effects (Appendix A.2, A.3). Gated rendering also makes the causal path explicit. E8 keeps the alternative testable.                                                 |
-| Persona wording       | Identity sentences, 5 discrete levels                                     | Numeric traits; continuous adjectives                | Numeric wording has no effect; identity wording has the largest (A.2).                                                                                                                                                   |
-| Action selection      | Sample after sharpening,`τ = 0.5`                                      | Argmax; raw sampling                                 | Argmax collapses the flat middle into identical behaviour; raw sampling is too noisy because of the checkpoint's calibration temperatures.`τ` is a config knob (E4).                                                  |
-| Specialization        | Mechanical yield multiplier + capability sentence                         | Prompt-only                                          | The user asked for genes that change capability; a mechanical effect is also the only reliable way to create real comparative advantage.                                                                                 |
-| Fitness               | `days_alive/D + alive·(½ health + ½ wealth)`                         | Survival only; wealth only                           | Survivors always outrank the dead (matches "the ones who survived are crossed"); the bonus provides a gradient among survivors.                                                                                          |
-| Selection / operators | Survivors, tournament k=3, 2 elites, uniform crossover, Gaussian mutation | Roulette; BLX-α                                     | Standard, easy to implement and to explain; parameters swept in E9.                                                                                                                                                      |
-| Reset per generation  | Records, memory, stock and health reset                                   | Heritable reputation                                 | Keeps generations independent and the GA interpretable; heritable memory listed as an extension.                                                                                                                         |
-| Model                 | `aac6fef/laya-mlx` (English, 512 ctx)                                   | multilingual (1,024 ctx, T=1)                        | Already used in the notebook and probed; E10 tests the swap.                                                                                                                                                             |
-| Congestion            | Village-wide supply cap per resource                                      | Spatial grid with patches                            | A cap yields the same diversification pressure without a spatial model and without more prompt text.                                                                                                                     |
-| Trades                | One per agent per day; need-driven                                        | Open market each day                                 | Bounded call count; enough to reward specialists.                                                                                                                                                                        |
-| Caching               | Optional`CachedBrain`                                                   | Always on / never                                    | Sound because Laya is deterministic and prompts are functions of discretized features; kept optional so that the "Laya decides every action" property is visibly preserved by default.                                   |
+| decision              | chosen                                                                    | alternatives                                          | rationale                                                                                                                                                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resources             | 2 (food, wood), both needed nightly                                       | 1 resource; 3+                                        | Two complementary needs are the minimum that makes specialization and trade meaningful; more resources multiply prompt options and calls.                                                                                                               |
+| Cooperation game      | Threshold public-goods "hunt" with observable effort                      | Linear PGG; pairwise iterated PD                      | Threshold game is the clearest "difficult resource that needs several people"; observability enables reputation, the interesting emergent channel.                                                                                                      |
+| Negotiation           | One-shot ultimatum, 3 fixed offers, need-driven only                      | Multi-round haggling; continuous prices via`score`  | Laya cannot reason about prices (Appendix A.5); a small labelled offer set with environment verdicts is the largest bargaining space it can express a persona in.`score` was tested and showed no persona sensitivity.                                |
+| Aggression channel    | Raid = whole-day activity, victim chooses fight/yield, public record      | Raids as free actions; no defence choice              | Whole-day cost makes raiding a real trade-off; the defence choice gives risk/aggression genes another outlet even though it is currently weak.                                                                                                          |
+| Gene expression       | Only decision-relevant genes rendered, first in the state                 | Full persona everywhere                               | Measured: stacking sentences dilutes and can invert effects (Appendix A.2, A.3). Gated rendering also makes the causal path explicit. E8 keeps the alternative testable.                                                                                |
+| Persona wording       | Identity sentences, 5 discrete levels                                     | Numeric traits; continuous adjectives                 | Numeric wording has no effect; identity wording has the largest (A.2).                                                                                                                                                                                  |
+| Action selection      | Sample after sharpening,`τ = 0.5`                                      | Argmax; raw sampling                                  | Argmax collapses the flat middle into identical behaviour; raw sampling is too noisy because of the checkpoint's calibration temperatures.`τ` is a config knob (E4).                                                                                 |
+| Specialization        | Mechanical yield multiplier + capability sentence                         | Prompt-only                                           | The user asked for genes that change capability; a mechanical effect is also the only reliable way to create real comparative advantage.                                                                                                                |
+| Fitness               | `days_alive/D + alive·(½ health + ½ wealth)`                         | Survival only; wealth only                            | Survivors always outrank the dead (matches "the ones who survived are crossed"); the bonus provides a gradient among survivors.                                                                                                                         |
+| Selection / operators | Survivors, tournament k=3, 2 elites, uniform crossover, Gaussian mutation | Roulette; BLX-α                                      | Standard, easy to implement and to explain; parameters swept in E9.                                                                                                                                                                                     |
+| Reset per generation  | Records, memory, stock and health reset                                   | Heritable reputation                                  | Keeps generations independent and the GA interpretable; heritable memory listed as an extension.                                                                                                                                                        |
+| Model                 | `aac6fef/laya-mlx` (English, 512 ctx)                                   | multilingual (1,024 ctx, T=1)                         | Already used in the notebook and probed; E10 tests the swap.                                                                                                                                                                                            |
+| Congestion            | Village-wide supply cap per resource                                      | Spatial grid with patches                             | A cap yields the same diversification pressure without a spatial model and without more prompt text.                                                                                                                                                    |
+| Trades                | One per agent per day; need-driven                                        | Open market each day                                  | Bounded call count; enough to reward specialists.                                                                                                                                                                                                       |
+| Caching               | Optional`CachedBrain`                                                   | Always on / never                                     | Sound because Laya is deterministic and prompts are functions of discretized features; kept optional so that the "Laya decides every action" property is visibly preserved by default.                                                                  |
+| Non-language baseline | Analytic conditional-logit policies over the same features (§6.7)        | Hand-written if/else rules; a second LLM; no baseline | A logit gives a*distribution* (sampled like Laya's), log-odds weights are interpretable and fittable (E13), and information parity makes engine comparisons (E11) meaningful. Rules would give deterministic behaviour and no gradient for selection. |
 
 ---
 
@@ -1199,8 +1434,9 @@ prompts:
   render_memory: true
 
 brain:
-  kind: laya                    # laya | mock
+  kind: laya                    # laya | mock | policy (§6.7)
   model: aac6fef/laya-mlx
+  policy_weights: configs/policy_weights.yaml   # used when kind = policy
   dtype: float16
   device: gpu
   batch_size: 8
@@ -1218,5 +1454,6 @@ evolution:
 
 log:
   prompts: true
+  features: false               # also log §6.7 policy features in every decision event (needed for E13)
   out_dir: runs
 ```

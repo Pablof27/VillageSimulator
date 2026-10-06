@@ -6,7 +6,7 @@ from resources import Resource, other
 from world import MemoryEventKind as MEK
 from genes import Gene, gather_mult, persona
 from labels import (
-    assessment, cap, event_sentence, health_status, need_status, recent_events,
+    CROWDED_BELOW, assessment, cap, event_sentence, health_status, need_status, recent_events,
     relation_sentence, reputation_label, strength_label, wealth_label,
 )
 
@@ -244,7 +244,7 @@ def _hunt_sentence(hunt) -> str:
 
 def _congestion_sentence(congestion: dict) -> str:
     places = {Resource.FOOD: "fields", Resource.WOOD: "forest"}
-    crowded = [r for r in Resource if congestion[r] < 0.75]
+    crowded = [r for r in Resource if congestion[r] < CROWDED_BELOW]
     if not crowded:
         return ""
     verb = "was" if crowded == [Resource.WOOD] else "were"

@@ -29,6 +29,8 @@ def decide(state: str, questions: dict[str, dict], brain: Brain) -> dict[str, An
 
 
 def make_brain(cfg: BrainConfig, rng) -> Brain:
+    if cfg.kind == "policy":
+        return PolicyBrain(cfg.policy_weights, tau=cfg.tau, rng=rng)
     brain = MockBrain(tau=cfg.tau, rng=rng) if cfg.kind == "mock" else LayaBrain(
         cfg.model, dtype=cfg.dtype, device=cfg.device, batch_size=cfg.batch_size,
         compile=cfg.compile, cache_prompts=cfg.cache_prompts, tau=cfg.tau, rng=rng)
@@ -115,6 +117,19 @@ class MockBrain(SamplingBrain):
                 continue
             out[name] = {label: 1 / len(labels) for label in labels}
         return out
+
+
+class PolicyBrain(SamplingBrain):
+    """For the analytic policy catalogue (§6.7): each question already carries its distribution."""
+
+    def __init__(self, weights_path: str, *, tau=1.0, rng):
+        super().__init__(tau, rng)
+        from policies import load_weights  # validates the weights file now rather than on the first decision
+
+        load_weights(weights_path)
+
+    def probabilities(self, state, questions):
+        return {name: q["probabilities"] for name, q in questions.items()}
 
 
 class CachedBrain(SamplingBrain):

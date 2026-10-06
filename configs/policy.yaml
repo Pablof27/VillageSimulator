@@ -1,0 +1,78 @@
+# configs/policy.yaml — the baseline with the analytic policy engine (SIMULATION_DESIGN.md §6.7, E11)
+run_name: policy
+seed: 0
+
+population:
+  N: 50
+  D: 100
+  G: 40
+  init_genes: uniform
+
+agent:
+  health_max: 10
+  health_init: 10
+  stock_init: {food: 2, wood: 2}
+  need: {food: 1, wood: 1}
+  miss_penalty: 2
+  regen: 1
+  rest_regen: 2
+
+gathering:
+  base_yield: 2.0
+  far_multiplier: 1.5
+  far_injury_p: 0.25
+  far_injury_dmg: 2
+  supply_per_capita: 1.2
+
+hunt:
+  min_party: 2
+  threshold_frac: 0.6
+  effort_cost: 1
+  payout: 4
+  supply_per_capita: 2.0
+  cancel_food: 1
+
+raid:
+  loot_frac: 0.5
+  fight_dmg: 2
+  max_candidates: 4
+
+market:
+  enabled: true
+  spare_min: 2
+  offers: {generous: [2, 1], fair: [1, 1], greedy: [1, 2]}   # [give other, get r]
+
+gifts:
+  enabled: true
+  spare_min: 3
+
+season:
+  schedule: stationary
+  food: 1.0
+  wood: 1.0
+
+memory:
+  days: 5
+  render: 2
+  rep_threshold: 2
+
+prompts:
+  persona_mode: gated           # none = genes neutral (E7); full behaves like gated
+  render_reputation: true
+  render_memory: true
+
+brain:
+  kind: policy
+  policy_weights: configs/policy_weights.yaml
+  tau: 1.0                      # policy probabilities are not flattened, so no extra sharpening
+
+evolution:
+  elites: 2
+  tournament_k: 3
+  p_mut: 0.15
+  sigma_mut: 0.1
+  wealth_ref: 10
+
+log:
+  prompts: true
+  out_dir: runs

@@ -10,7 +10,7 @@ from typing import Callable
 from brain import make_brain
 from config import Config
 from genes import Gene, Genome
-from prompts import accept, defend, effort, gift, morning, offer
+from phases import catalogue
 from resources import Resource
 from world import Agent, Day, Hunt, Village
 
@@ -42,7 +42,7 @@ def calibrate(cfg: Config, out_dir: str | Path, brain=None, progress=print) -> d
         progress(line)
 
     report = {
-        "model": cfg.brain.model if cfg.brain.kind == "laya" else cfg.brain.kind,
+        "model": {"laya": cfg.brain.model, "policy": cfg.brain.policy_weights}.get(cfg.brain.kind, cfg.brain.kind),
         "persona_mode": cfg.prompts.persona_mode,
         "criteria": {"min_delta": MIN_DELTA, "marginal_delta": MARGINAL_DELTA, "monotone_tol": MONOTONE_TOL},
         "weak_channels": [r["name"] for r in results if r["status"] == "fail"],
@@ -109,32 +109,32 @@ def _village(genome: Genome, stock=(2, 2), others_stock=(3, 3), n=20) -> tuple[V
 
 def _morning(cfg, genome, stock=(2, 2)):
     v, me, others = _village(genome, stock)
-    return morning(cfg, v, me, others[:3])
+    return catalogue(cfg).morning(cfg, v, me, others[:3])
 
 
 def _effort(cfg, genome):
     v, me, others = _village(genome)
-    return effort(cfg, v, me, [me, *others[:4]], 3)
+    return catalogue(cfg).effort(cfg, v, me, [me, *others[:4]], 3)
 
 
 def _defend(cfg, genome):
     v, me, others = _village(genome)
-    return defend(cfg, v, me, others[0])
+    return catalogue(cfg).defend(cfg, v, me, others[0])
 
 
 def _offer(cfg, genome):
     v, me, others = _village(genome, stock=(0, 3), others_stock=(4, 2))
-    return offer(cfg, v, me, others[0], FOOD, cfg.market.offers)
+    return catalogue(cfg).offer(cfg, v, me, others[0], FOOD, cfg.market.offers)
 
 
 def _accept(cfg, genome):
     v, me, others = _village(genome, stock=(4, 2), others_stock=(0, 3))
-    return accept(cfg, v, me, others[0], FOOD, "fair", 1, 1)
+    return catalogue(cfg).accept(cfg, v, me, others[0], FOOD, "fair", 1, 1)
 
 
 def _gift(cfg, genome):
     v, me, others = _village(genome, stock=(4, 4), others_stock=(0, 2))
-    return gift(cfg, v, me, others[0], FOOD)
+    return catalogue(cfg).gift(cfg, v, me, others[0], FOOD)
 
 
 # ---- helpers ----------------------------------------------------------------

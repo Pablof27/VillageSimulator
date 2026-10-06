@@ -64,7 +64,8 @@ def _run(args) -> None:
 
 def _calibrate(args) -> None:
     cfg = Config.from_dict(_with_overrides(yaml.safe_load(args.config.read_text()) or {}, args))
-    print(f"calibrating {cfg.brain.model if cfg.brain.kind == 'laya' else 'mock brain'} "
+    engine = {"laya": cfg.brain.model, "policy": f"policy engine ({cfg.brain.policy_weights})"}
+    print(f"calibrating {engine.get(cfg.brain.kind, 'mock brain')} "
           f"(persona_mode={cfg.prompts.persona_mode}) -> {args.out / 'calibration.json'}")
     calibrate(cfg, args.out)
 
