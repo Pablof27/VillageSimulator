@@ -2,6 +2,7 @@
 #   python src/main.py run --config configs/baseline.yaml --seed 0
 #   python src/main.py run --config configs/baseline.yaml --brain mock --generations 2 --days 3   # smoke test
 #   python src/main.py plot runs/baseline_s0
+#   python src/main.py calibrate --config configs/baseline.yaml --out runs/calibration
 import argparse
 import sys
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from calibrate import calibrate
 from config import Config
 from plots import plot_run
 from simulation import run
@@ -31,9 +33,18 @@ def main() -> None:
     plot_cmd = commands.add_parser("plot", help="(re)draw the plots of a finished run")
     plot_cmd.add_argument("run_dir", type=Path)
 
+    cal_cmd = commands.add_parser("calibrate", help="E0: check that each decision responds to its gene")
+    cal_cmd.add_argument("--config", type=Path, default=Path("configs/baseline.yaml"))
+    cal_cmd.add_argument("--model", help="overrides `brain.model`")
+    cal_cmd.add_argument("--brain", choices=("laya", "mock"), help="overrides `brain.kind`")
+    cal_cmd.add_argument("--out", type=Path, default=Path("runs/calibration"))
+
     args = parser.parse_args()
     if args.command == "plot":
         _print_plots(plot_run(args.run_dir))
+        return
+    if args.command == "calibrate":
+        _calibrate(args)
         return
     _run(args)
 
@@ -51,12 +62,20 @@ def _run(args) -> None:
         _print_plots(plot_run(result.run_dir))
 
 
+def _calibrate(args) -> None:
+    cfg = Config.from_dict(_with_overrides(yaml.safe_load(args.config.read_text()) or {}, args))
+    print(f"calibrating {cfg.brain.model if cfg.brain.kind == 'laya' else 'mock brain'} "
+          f"(persona_mode={cfg.prompts.persona_mode}) -> {args.out / 'calibration.json'}")
+    calibrate(cfg, args.out)
+
+
 def _with_overrides(data: dict, args) -> dict:
     overrides = {
-        ("seed",): args.seed,
-        ("population", "G"): args.generations,
-        ("population", "D"): args.days,
+        ("seed",): getattr(args, "seed", None),
+        ("population", "G"): getattr(args, "generations", None),
+        ("population", "D"): getattr(args, "days", None),
         ("brain", "kind"): args.brain,
+        ("brain", "model"): getattr(args, "model", None),
     }
     for path, value in overrides.items():
         if value is None:
