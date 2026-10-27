@@ -3,8 +3,8 @@
 # Usage from the generation loop:
 #     with RunLog(cfg) as log:
 #         for gen in range(cfg.population.G):
-#             log.start_generation(gen)
-#             ... run_day(cfg, village, brain, rng, log) ...
+#             log.start_generation(gen, agents)
+#             ... run_day(cfg, village, brain, rng, log); log.end_day(village) ...
 #             log.end_generation(village.agents)
 import csv
 import json
@@ -32,6 +32,8 @@ class LogEventType(Enum):
     night = "night"
     death = "death"
     generation = "generation"
+    population = "population"
+    day_end = "day_end"
 
 
 Phase = Literal["morning", "gathering", "hunt", "raid", "market", "night", "generation"]
@@ -79,11 +81,19 @@ class RunLog:
         if self._decisions:
             self._decisions.close()
 
-    def start_generation(self, gen: int) -> None:
+    def start_generation(self, gen: int, agents) -> None:
         self.gen = gen
         self.events = []
         self._last_day = 0
         self._t0 = time.perf_counter()
+        self.emit(LogEventType.population, "generation", 0, agents=[
+            {"id": a.id, "genome": {g.value: a.genome[g] for g in Gene}, "parents": a.parents,
+             "health": a.health, "stock": a.stock} for a in agents])
+
+    def end_day(self, village) -> None:
+        """Marks the day as complete and flushes it, so a viewer can follow the run live."""
+        self.emit(LogEventType.day_end, "night", village.day_count, season=village.season, alive=village.n_alive)
+        self._events.flush()
 
     def emit(self, type_: LogEventType | str, phase: Phase, day: int, **payload) -> None:
         event = LogEvent(self.cfg.run_name, self.gen, day, phase, LogEventType(type_), payload).to_dict()

@@ -823,6 +823,8 @@ Every line has `{"run": str, "gen": int, "day": int, "phase": str, "type": str, 
 | `gift`       | `donor, recipient, resource, given`                                                                               |
 | `night`      | `agent, ate, burned, health_after`                                                                                |
 | `death`      | `agent, cause`                                                                                                    |
+| `population` | `agents: [{id, genome, parents, health, stock}]` at the start of each generation (day 0)                          |
+| `day_end`    | `season, alive`; the file is flushed after it, so a viewer can follow a running simulation                        |
 | `generation` | see §8.2                                                                                                           |
 
 Decision logs are large (≈1,100 per generation). Keep `state` and `questions` in a separate `decisions.jsonl` behind a flag (`log.prompts: true`), default on for the first run so prompts can be audited.

@@ -29,7 +29,7 @@ def run(cfg: Config, run_dir: str | Path | None = None, brain=None, progress=pri
         for gen in range(cfg.population.G):
             agents = spawn(offspring, cfg, next_id)
             next_id += len(agents)
-            log.start_generation(gen)
+            log.start_generation(gen, agents)
             run_generation(cfg, agents, gen, brain, rng, log)
             row = log.end_generation(agents)
             result.generations.append(row)
@@ -43,6 +43,7 @@ def run_generation(cfg: Config, agents: list[Agent], gen: int, brain, rng, log) 
     for day in range(1, cfg.population.D + 1):
         village.season = season_for(cfg, gen, day)
         run_day(cfg, village, brain, rng, log)
+        log.end_day(village)
         if village.n_alive < 2:
             break
     return village
