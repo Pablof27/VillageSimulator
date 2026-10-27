@@ -97,8 +97,8 @@ class Dashboard:
         for lv in range(5):
             bx = x + lv * (bw + gap)
             col = ramp(g, (lv + 0.5) / 5)
-            hh = bar_h * self._ease((g, lv), now[lv], dt) / top
-            sh = bar_h * start[lv] / top
+            hh = (bar_h - 14) * self._ease((g, lv), now[lv], dt) / top
+            sh = (bar_h - 14) * start[lv] / top
             if hh > 0.3:
                 cv.rect(col, (bx, top_y + bar_h - hh, bw, hh), radius=min(4, hh / 2))
             if start[lv]:

@@ -277,7 +277,7 @@ class Scene:
         for slot, t0 in self.graves.items():
             sprites.grave(cv, *layout.door(slot), alpha=int(255 * min(1.0, (self.clock - t0) / 0.6)))
         for i, s in self.shown.items():
-            if s.alive and not s.leaving:
+            if s.alive and not s.leaving and self.pose(i, t)[3] > 0.02:
                 sprites.pile(cv, *layout.pile(self.slots[i]), s.food, s.wood)
         effects = [e for e in self.timeline.effects if e.t0 <= t < e.t1] if self.timeline else []
         for e in effects:

@@ -19,8 +19,11 @@ MAX_ITEMS = 6  # items drawn per transfer; any remainder lands with the last one
 OFFER_EDGE = {"generous": GOOD, "fair": (84, 90, 106), "greedy": BAD}
 
 
-def _head(i):
-    return lambda t, sc: sc.head(i, t)
+def _head(i, lift=0.0):
+    def at(t, sc):
+        x, y = sc.head(i, t)
+        return x, y - lift
+    return at
 
 
 def _feet(i):
@@ -155,13 +158,13 @@ class _Day:
         tl, L, rng = self.tl, self.L, self.rng
         party = h["party"]
         cx, cy = L.zones["hunt"].center
-        prey, above = (cx, cy + 16), (cx, cy - 84)
+        prey, caption = (cx, cy + 16), (cx, cy + 104)
         for k, i in enumerate(party):
             start = t0 + rng.uniform(0.0, 0.3)
             self.tr(i).go(start, w0 - start, L.hunt_spot(k, len(party)))
             self.tr(i).look(w0, w1, prey)
         if h["cancelled"]:
-            tl.add(Label("Too few hunters: the hunt is called off", above, w0, w1 + 0.4, MUTED))
+            tl.add(Label("Too few hunters: the hunt is called off", caption, w0, w1 + 0.4, MUTED))
             tl.at(w0 + 0.6, lambda sc: setattr(sc.stats, "hunt", h))
             for i in party:
                 self._to_carry("food", prey, i, h["payout"], w0 + 0.6, w0 + 1.0)
@@ -184,8 +187,8 @@ class _Day:
                 tr.mood(w0, result, "lazy")
                 tl.add(Emote("lazy", _head(i), w0 + 0.1, result, size=6))
         verdict = f"{len(workers)} of {len(party)} hunters worked hard ({h['threshold']} needed)"
-        tl.add(Label(verdict, above, w0 + 0.6, w1 + 0.6))
-        below = (above[0], above[1] + 27)
+        tl.add(Label(verdict, caption, w0 + 0.6, w1 + 0.6))
+        below = (caption[0], caption[1] + 27)
         if h["success"]:
             tl.add(Label(f"Success! +{h['payout']} food each", below, result, w1 + 0.6, GOOD))
             tl.add(Flash(prey, result, result + 0.5, GOOD, 70))
@@ -303,7 +306,7 @@ class _Day:
         tl.add(Bubble(_head(p), meet, meet + 1.0 * k, [("n", give), o, ("n", "for", MUTED), ("n", get), r],
                       edge=OFFER_EDGE.get(e["offer"], MUTED)))
         answer = meet + 0.6 * k
-        tl.add(Bubble(_head(q), answer, answer + 0.65 * k, ["check" if ok else "cross"]))
+        tl.add(Bubble(_head(q, lift=26), answer, answer + 0.65 * k, ["check" if ok else "cross"]))
         leave = answer + 0.6 * k
         if ok:
             swap = answer + 0.4 * k
