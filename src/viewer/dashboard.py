@@ -363,7 +363,8 @@ def draw_help(cv: Canvas):
     keys = (("space", "pause / resume"), ("+  -", "faster / slower"), ("N", "skip to the next day"),
             ("G", "skip to the next generation"), ("L", "jump to the latest day (live)"),
             ("1 2 3 4", "body colour: aggression, altruism, risk, specialization"),
-            ("mouse", "hover a blob to see its genes"), ("H", "show / hide this help"), ("Q  esc", "quit"))
+            ("mouse", "hover a blob to see its genes"), ("F", "full screen on / off (or resize the window)"),
+            ("H", "show / hide this help"), ("Q  esc", "quit (esc leaves full screen first)"))
     w, h = 560, 52 + 26 * len(keys)
     x, y = (MAP_W - w) / 2, (H - h) / 2
     cv.rect(shade(PANEL, 0.8), (x, y + 3, w, h), radius=16)

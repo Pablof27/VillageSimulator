@@ -14,10 +14,12 @@ from viewer.dashboard import Dashboard, Status, draw_help, draw_legend, draw_too
 from viewer.layout import H, MAP_W, W
 from viewer.replay import DayLog, EventReader, GenEnd, GenStart, generations_logged
 from viewer.scene import Scene
-from viewer.style import GENES, INK
+from viewer.style import GENES, INK, PANEL, shade
 from viewer.timeline import Label
 
 SPEEDS = (0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0, 32.0)
+MAX_RENDER_W = 3840  # cap on the supersampled frame width, so big screens stay smooth
+LETTERBOX = shade(PANEL, 0.88)
 
 
 class Player:
@@ -97,37 +99,70 @@ class Player:
 
 def run_window(run_dir, *, cfg=None, live=None, not_before=0.0, sim=None, size=None, ssaa=2, speed=1.0,
                color_by="aggression") -> None:
-    """Interactive viewer. Follows the log while the run is unfinished; `sim` is the simulation process, if any."""
+    """Interactive viewer in a resizable window (F: full screen). Follows the log while the run is unfinished;
+    `sim` is the simulation process, if any."""
     run_dir = Path(run_dir)
     pygame.init()
-    w, h = size or _window_size()
-    screen = pygame.display.set_mode((w, h))
-    pygame.display.set_caption(f"Laya Village - {run_dir.name}   (H for help)")
+    window = pygame.Window(f"Laya Village - {run_dir.name}   (H: help, F: full screen)", size or _window_size(),
+                           resizable=True, allow_high_dpi=True)
+    window.minimum_size = (480, 270)
     reader = EventReader(run_dir, cfg=cfg, follow=True, not_before=not_before)
     if live is None:
         live = generations_logged(run_dir) < reader.cfg.population.G
     player = Player(reader, color_by, speed)
-    frame = pygame.Surface((round(W * w / W * ssaa), round(H * w / W * ssaa)))
-    cv = Canvas(frame, w / W * ssaa)
-    clock, mouse, show_help = pygame.time.Clock(), None, False
+    clock, mouse, show_help, fullscreen, view = pygame.time.Clock(), None, False, False, None
     try:
         while True:
             dt = clock.tick(60) / 1000
+            screen = window.get_surface()
+            if view is None or view.pixels != screen.get_size():
+                view = _Viewport(screen.get_size(), ssaa)
+            dpi = screen.get_width() / max(1, window.size[0])  # 2 on Retina: events come in points
             for ev in pygame.event.get():
-                if ev.type == pygame.QUIT or (ev.type == pygame.KEYDOWN and ev.key in (pygame.K_q, pygame.K_ESCAPE)):
+                key = ev.key if ev.type == pygame.KEYDOWN else None
+                if ev.type in (pygame.QUIT, pygame.WINDOWCLOSE) or key == pygame.K_q or \
+                        (key == pygame.K_ESCAPE and not fullscreen):
                     return
                 if ev.type == pygame.MOUSEMOTION:
-                    mouse = (ev.pos[0] * W / w, ev.pos[1] * W / w)
-                elif ev.type == pygame.KEYDOWN:
-                    show_help = _key(player, ev.key, show_help)
+                    mouse = view.to_virtual((ev.pos[0] * dpi, ev.pos[1] * dpi))
+                elif key in (pygame.K_f, pygame.K_F11, pygame.K_ESCAPE):
+                    fullscreen = not fullscreen
+                    if fullscreen:
+                        window.set_fullscreen(desktop=True)
+                    else:
+                        window.set_windowed()
+                elif key is not None:
+                    show_help = _key(player, key, show_help)
             if sim is not None and reader.follow and not sim.is_alive():
                 reader.follow = False
             player.update(min(dt, 0.1))
-            player.draw(cv, dt, "live" if live else "replay", run_dir.name, mouse, show_help)
-            screen.blit(pygame.transform.smoothscale(frame, (w, h)) if ssaa > 1 else frame, (0, 0))
-            pygame.display.flip()
+            player.draw(view.canvas, dt, "live" if live else "replay", run_dir.name, mouse, show_help)
+            view.present(screen)
+            window.flip()
     finally:
         pygame.quit()
+
+
+class _Viewport:
+    """The 16:9 frame, letterboxed in a window surface of any size, rendered supersampled and smoothed down."""
+
+    def __init__(self, pixels: tuple[int, int], ssaa: float):
+        self.pixels = pixels
+        self.scale = max(1e-3, min(pixels[0] / W, pixels[1] / H))
+        self.size = (max(1, round(W * self.scale)), max(1, round(H * self.scale)))
+        self.offset = ((pixels[0] - self.size[0]) // 2, (pixels[1] - self.size[1]) // 2)
+        k = min(self.scale * ssaa, max(self.scale, MAX_RENDER_W / W))
+        self.canvas = Canvas(pygame.Surface((round(W * k), round(H * k))), k)
+
+    def to_virtual(self, pos) -> tuple[float, float]:
+        return (pos[0] - self.offset[0]) / self.scale, (pos[1] - self.offset[1]) / self.scale
+
+    def present(self, screen: pygame.Surface) -> None:
+        frame = self.canvas.surface
+        if self.offset != (0, 0):
+            screen.fill(LETTERBOX)
+        screen.blit(frame if frame.get_size() == self.size else pygame.transform.smoothscale(frame, self.size),
+                    self.offset)
 
 
 def render_video(run_dir, out, *, gens=None, days=None, fps=30, size=(1920, 1080), ssaa=2, speed=1.0,
@@ -204,8 +239,7 @@ def _key(player: Player, key: int, show_help: bool) -> bool:
 
 
 def _window_size() -> tuple[int, int]:
+    """The largest 16:9 window that fits on the desktop with room for the menu bar and dock."""
     info = pygame.display.Info()
-    for w, h in ((1920, 1080), (1600, 900), (1440, 810), (1280, 720), (1024, 576)):
-        if w <= 0.94 * info.current_w and h <= 0.86 * info.current_h:
-            return w, h
-    return 960, 540
+    s = min(0.95 * info.current_w / W, 0.88 * info.current_h / H)
+    return round(W * s), round(H * s)

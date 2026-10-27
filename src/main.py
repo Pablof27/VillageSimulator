@@ -79,7 +79,8 @@ def _viewer_args(cmd, size=None, speed=1.0) -> None:
     cmd.add_argument("--speed", type=float, default=speed, help=f"animation speed (default {speed:g})")
     cmd.add_argument("--color-by", choices=[g.value for g in Gene], default="aggression",
                      help="gene shown as the blobs' body colour")
-    cmd.add_argument("--size", type=_size, default=size, help="frame size WIDTHxHEIGHT, 16:9 (default: fit the screen)")
+    cmd.add_argument("--size", type=_size, default=size,
+                     help="WIDTHxHEIGHT: video size, or initial window size (resizable; default fits the screen)")
     cmd.add_argument("--ssaa", type=int, default=2, help="supersampling factor for anti-aliasing (1 = faster)")
 
 
